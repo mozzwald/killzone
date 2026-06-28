@@ -21,7 +21,7 @@
 #define CHAR_EMPTY '.'
 #define CHAR_PLAYER '@'
 #define CHAR_ENEMY '*'
-#define CHAR_HUNTER '^'
+#define CHAR_HUNTER '+'
 #define CHAR_WALL '#'
 
 /* Player Limits */

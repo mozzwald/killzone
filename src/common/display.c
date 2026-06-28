@@ -7,6 +7,9 @@
 
 #include "display.h"
 #include "network.h"
+#ifdef __ATARI__
+#include "atari_visuals.h"
+#endif
 #ifdef _CMOC_VERSION_
 #include <cmoc.h>
 #include <coco.h>
@@ -20,6 +23,28 @@
 
 /* Direct drawing to screen, no buffer needed */
 
+static uint8_t status_needs_redraw = 1;
+
+static void display_clear_line(uint8_t y, uint8_t width) {
+    uint8_t x;
+
+    for (x = 0; x < width; x++) {
+        cputcxy(x, y, ' ');
+    }
+}
+
+static void display_puts_limited(uint8_t x, uint8_t y, const char *text, uint8_t max_len) {
+    uint8_t i;
+
+    if (!text) {
+        return;
+    }
+
+    for (i = 0; i < max_len && text[i] != '\0'; i++) {
+        cputcxy((uint8_t)(x + i), y, text[i]);
+    }
+}
+
 /**
  * Initialize display system
  */
@@ -28,12 +53,18 @@ void display_init(void) {
     hirestxt_init();    
 #endif
     clrscr();  /* Clear screen using conio */
+#ifdef __ATARI__
+    atari_visuals_init();
+#endif
 }
 
 /**
  * Close display system
  */
 void display_close(void) {
+#ifdef __ATARI__
+    atari_visuals_shutdown();
+#endif
     clrscr();
 #ifdef _CMOC_VERSION_
     hirestxt_close();
@@ -79,32 +110,76 @@ void display_draw_status_bar(const char *player_name, uint8_t player_count,
     static char line_buf[41];
     static char ticks_buf[11];
     static char ver_buf[16];
+    static char last_info_buf[30] = "";
+    static char last_ticks_buf[11] = "";
+    static char last_ver_buf[16] = "";
+    static uint8_t static_status_drawn = 0;
     const char *server_ver;
+    uint8_t ver_len;
+    uint8_t x;
     
     if (!player_name || !connection_status) {
         return;
     }
     
-    /* Line 20: Player info on left, ticks on right (starting at char 30) */
+    /* Line 20: Player info on left, ticks on right. */
     snprintf(line_buf, sizeof(line_buf), "%s P:%d %s", player_name, player_count, connection_status);
-    cputsxy(0, 20, line_buf);
+    if (status_needs_redraw || strcmp(line_buf, last_info_buf) != 0) {
+        for (x = 0; x < 30; x++) {
+            cputcxy(x, 20, ' ');
+        }
+        display_puts_limited(0, 20, line_buf, 29);
+        strncpy(last_info_buf, line_buf, sizeof(last_info_buf) - 1);
+        last_info_buf[sizeof(last_info_buf) - 1] = '\0';
+    }
     
     snprintf(ticks_buf, sizeof(ticks_buf), "T:%d", world_ticks);
-    cputsxy(30, 20, ticks_buf);
+    if (status_needs_redraw || strcmp(ticks_buf, last_ticks_buf) != 0) {
+        for (x = 30; x < 39; x++) {
+            cputcxy(x, 20, ' ');
+        }
+        display_puts_limited(30, 20, ticks_buf, 9);
+        strncpy(last_ticks_buf, ticks_buf, sizeof(last_ticks_buf) - 1);
+        last_ticks_buf[sizeof(last_ticks_buf) - 1] = '\0';
+    }
     
-    /* Line 21: Clear for server messages (combat, kills, etc) */
-    /* Messages written by display_draw_combat_message() */
-    
-    /* Line 22: Separator */
-    cputsxy(0, 22, "----------------------------------------");
-    
-    /* Line 23: Command help on left, version on right */
-    cputsxy(0, 23, "WASD=Move R=Refresh Q=Quit");
+    if (status_needs_redraw || !static_status_drawn) {
+        /* Line 21: reserved for combat messages. */
+        for (x = 0; x < 39; x++) {
+            cputcxy(x, 21, ' ');
+        }
+
+        /* Line 22: Separator */
+        display_puts_limited(0, 22, "---------------------------------------", 39);
+        
+        /*
+         * Keep row 23 column 39 untouched. Writing the bottom-right cell can
+         * advance the Atari text cursor and scroll the display.
+         */
+        for (x = 0; x < 39; x++) {
+            cputcxy(x, 23, ' ');
+        }
+        display_puts_limited(0, 23, "WASD=Move R=Refresh Q=Quit", 27);
+        static_status_drawn = 1;
+    }
     
     /* Version display at far right: C1.1.0|S1.1.0 */
     server_ver = state_get_server_version();
     snprintf(ver_buf, sizeof(ver_buf), "C%s|S%s", CLIENT_VERSION, server_ver);
-    cputsxy((uint8_t)(40 - strlen(ver_buf)), 23, ver_buf);
+    if (status_needs_redraw || strcmp(ver_buf, last_ver_buf) != 0) {
+        ver_len = (uint8_t)strlen(ver_buf);
+        if (ver_len > 38) {
+            ver_len = 38;
+        }
+        for (x = 27; x < 39; x++) {
+            cputcxy(x, 23, ' ');
+        }
+        display_puts_limited((uint8_t)(39 - ver_len), 23, ver_buf, ver_len);
+        strncpy(last_ver_buf, ver_buf, sizeof(last_ver_buf) - 1);
+        last_ver_buf[sizeof(last_ver_buf) - 1] = '\0';
+    }
+
+    status_needs_redraw = 0;
 }
 
 /**
@@ -118,13 +193,11 @@ void display_draw_combat_message(const char *message) {
     }
     
     /* Clear line first */
-    memset(line_buf, ' ', 40);
-    line_buf[40] = '\0';
-    cputsxy(0, 21, line_buf);
+    display_clear_line(21, DISPLAY_WIDTH);
     
     /* Draw message */
     snprintf(line_buf, sizeof(line_buf), "%s", message);
-    cputsxy(0, 21, line_buf);
+    display_puts_limited(0, 21, line_buf, DISPLAY_WIDTH);
 }
 
 /* Game Rendering */
@@ -149,7 +222,7 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
     if (!local || local->x >= 255 || local->y >= 255) {
         return;
     }
-    
+
     /* Full redraw on first render or when player count changes or refresh requested */
     
     if (force_refresh) {
@@ -159,18 +232,17 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
     /* Only do full redraw on first render or explicit refresh */
     if (!world_rendered) {
         clrscr();
+        status_needs_redraw = 1;
         /* Draw world line by line - this fills the play area */
         for (y = 0; y < DISPLAY_HEIGHT; y++) {
-            gotoxy(0, y);
             for (x = 0; x < DISPLAY_WIDTH; x++) {
-                printf("%c", CHAR_EMPTY);
+                cputcxy(x, y, CHAR_EMPTY);
             }
         }
         
         /* Draw other entities */
         for (i = 0; i < count; i++) {
             if (others[i].x < DISPLAY_WIDTH && others[i].y < DISPLAY_HEIGHT) {
-                gotoxy(others[i].x, others[i].y);
                 if (strcmp(others[i].type, "player") == 0) {
                     entity_char = CHAR_WALL;
                 } else if (others[i].isHunter) {
@@ -178,14 +250,13 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
                 } else {
                     entity_char = CHAR_ENEMY;
                 }
-                printf("%c", entity_char);
+                cputcxy(others[i].x, others[i].y, entity_char);
             }
         }
         
         /* Draw local player */
         if (local->x < DISPLAY_WIDTH && local->y < DISPLAY_HEIGHT) {
-            gotoxy(local->x, local->y);
-            printf("%c", CHAR_PLAYER);
+            cputcxy(local->x, local->y, CHAR_PLAYER);
         }
         
         last_player_x = local->x;
@@ -195,8 +266,13 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
         
         /* Initialize tracked positions */
         for (i = 0; i < count && i < MAX_OTHER_PLAYERS; i++) {
-            last_other_positions[i * 2] = others[i].x;
-            last_other_positions[i * 2 + 1] = others[i].y;
+            if (others[i].x < DISPLAY_WIDTH && others[i].y < DISPLAY_HEIGHT) {
+                last_other_positions[i * 2] = others[i].x;
+                last_other_positions[i * 2 + 1] = others[i].y;
+            } else {
+                last_other_positions[i * 2] = 255;
+                last_other_positions[i * 2 + 1] = 255;
+            }
         }
         /* Mark remaining slots as invalid */
         for (i = count; i < MAX_OTHER_PLAYERS; i++) {
@@ -213,8 +289,7 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
                 uint8_t old_x = last_other_positions[i * 2];
                 uint8_t old_y = last_other_positions[i * 2 + 1];
                 if (old_x < DISPLAY_WIDTH && old_y < DISPLAY_HEIGHT) {
-                    gotoxy(old_x, old_y);
-                    printf("%c", CHAR_EMPTY);
+                    cputcxy(old_x, old_y, CHAR_EMPTY);
                 }
                 last_other_positions[i * 2] = 255;
                 last_other_positions[i * 2 + 1] = 255;
@@ -225,12 +300,14 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
         /* Update player position if changed */
         if (local->x != last_player_x || local->y != last_player_y) {
             /* Erase old player position */
-            gotoxy(last_player_x, last_player_y);
-            printf("%c", CHAR_EMPTY);
+            if (last_player_x < DISPLAY_WIDTH && last_player_y < DISPLAY_HEIGHT) {
+                cputcxy(last_player_x, last_player_y, CHAR_EMPTY);
+            }
             
             /* Draw new player position */
-            gotoxy(local->x, local->y);
-            printf("%c", CHAR_PLAYER);
+            if (local->x < DISPLAY_WIDTH && local->y < DISPLAY_HEIGHT) {
+                cputcxy(local->x, local->y, CHAR_PLAYER);
+            }
             
             last_player_x = local->x;
             last_player_y = local->y;
@@ -247,13 +324,11 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
             if (old_x != new_x_other || old_y != new_y_other) {
                 /* Erase old position (if valid) */
                 if (old_x < DISPLAY_WIDTH && old_y < DISPLAY_HEIGHT) {
-                    gotoxy(old_x, old_y);
-                    printf("%c", CHAR_EMPTY);
+                    cputcxy(old_x, old_y, CHAR_EMPTY);
                 }
                 
                 /* Draw new position */
                 if (new_x_other < DISPLAY_WIDTH && new_y_other < DISPLAY_HEIGHT) {
-                    gotoxy(new_x_other, new_y_other);
                     if (strcmp(others[i].type, "player") == 0) {
                         entity_char = CHAR_WALL;
                     } else if (others[i].isHunter) {
@@ -261,7 +336,7 @@ void display_render_game(const player_state_t *local, const player_state_t *othe
                     } else {
                         entity_char = CHAR_ENEMY;
                     }
-                    printf("%c", entity_char);
+                    cputcxy(new_x_other, new_y_other, entity_char);
                 }
                 
                 /* Update tracked position */
@@ -337,4 +412,3 @@ void display_toggle_color_scheme(void) {
     switch_colorset();
 #endif
 }
-

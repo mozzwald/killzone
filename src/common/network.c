@@ -248,7 +248,6 @@ uint8_t kz_network_get_world_state(void) {
             uint16_t ticks = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
             state_set_world_ticks(ticks);
         }
-        
         /* Read message if present */
         msgLen = buf[4];
         if (msgLen > 0 && msgLen < 40) {
