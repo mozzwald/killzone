@@ -12,7 +12,8 @@ const Mob = require('./mob');
 const createApiRoutes = require('./routes/api');
 const TcpServer = require('./tcp_server');
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const TCP_PORT = parseInt(process.env.TCP_PORT || '6809', 10);
 
 // Initialize world
 const world = new World(40, 20);
@@ -100,7 +101,7 @@ app.use((req, res) => {
 let server;
 if (process.env.NODE_ENV !== 'test') {
   // Start TCP Server
-  const tcpServer = new TcpServer(world, 3001);
+  const tcpServer = new TcpServer(world, TCP_PORT);
   tcpServer.start();
 
   server = app.listen(PORT, () => {
